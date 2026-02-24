@@ -221,7 +221,7 @@ def scrape_interview(
     if not soup:
         return None
     row = extract_transcript_metadata_and_text(soup)
-    row["player_name"] = player_name
+    row["player_name"] = player_name or row["player_name"]
     row["interview_title"] = row["interview_title"] or interview_title
     row["date"] = date_from_player_page or row["date"]
     row["interview_id"] = interview_id
