@@ -1,7 +1,7 @@
 """
 Scrape ASAP Sports baseball interview transcripts.
 Flow: landing (letters A–Z) → letter page (players) → player page (interviews) → interview page (transcript).
-Output: single CSV with resume support and rate limiting.
+Output: one CSV per letter (a–z) with resume support and rate limiting.
 """
 
 import csv
@@ -20,16 +20,14 @@ _landing = urlparse(LANDING_URL)
 BASE_URL = f"{_landing.scheme}://{_landing.netloc}"
 CATEGORY_ID = parse_qs(_landing.query).get("id", ["2"])[0]
 
-RATE_LIMIT_SEC = 0.8
-CSV_PATH = Path(__file__).resolve().parent.parent / "asap_baseball_transcripts.csv"
+RATE_LIMIT_SEC = 0.3
+CSV_DIR = Path(__file__).resolve().parent.parent
+CSV_NAME_PREFIX = "asap_baseball_transcripts"
 CSV_COLUMNS = [
     "player_name",
     "interview_title",
     "date",
     "event",
-    "venue",
-    "team",
-    "session_type",
     "interview_id",
     "url",
     "transcript",
@@ -118,59 +116,38 @@ def parse_interview_id(url: str) -> str | None:
 
 
 def extract_transcript_metadata_and_text(soup: BeautifulSoup) -> dict:
-    """Extract event, date, player, venue, team, session_type and full transcript."""
+    """Extract event, date, player (fallback) and full transcript."""
     data = {
         "player_name": "",
         "interview_title": "",
         "date": "",
         "event": "",
-        "venue": "",
-        "team": "",
-        "session_type": "",
         "transcript": "",
     }
     if not soup:
         return data
 
-    # Title often in h1
     h1 = soup.find("h1")
     if h1:
         data["event"] = (h1.get_text() or "").strip()
         data["interview_title"] = data["event"]
 
-    # Date is in h2 on ASAP pages (e.g. "October 4, 2023")
     h2 = soup.find("h2")
     if h2:
         t = (h2.get_text() or "").strip()
         if re.match(r"^[A-Z][a-z]+\s+\d{1,2},?\s+\d{4}$", t):
             data["date"] = t
 
-    # h3 blocks: first = interviewee name, then venue, team, session type
     all_h3 = soup.find_all("h3")
-    texts = [(h.get_text() or "").strip() for h in all_h3]
-    for i, t in enumerate(texts):
+    for h in all_h3:
+        t = (h.get_text() or "").strip()
         if not t:
             continue
         if re.match(r"^[A-Z][a-z]+\s+\d{1,2},?\s+\d{4}$", t):
             data["date"] = data["date"] or t
         elif not data["player_name"]:
             data["player_name"] = t
-        elif any(x in t.lower() for x in ("field", "stadium", "park", "center")):
-            data["venue"] = t
-        elif any(x in t.lower() for x in ("press", "conference", "session")):
-            data["session_type"] = t
-        elif not data["team"] and any(x in t.lower() for x in (
-            "twins", "yankees", "sox", "mets", "dodgers", "braves", "guardians",
-            "angels", "mariners", "athletics", "rangers", "royals", "tigers",
-            "rays", "orioles", "blue jays", "nationals", "phillies", "marlins",
-            "cardinals", "cubs", "brewers", "pirates", "reds", "astros",
-            "giants", "padres", "diamondbacks", "rockies", "indians"
-        )):
-            data["team"] = t
-        elif not data["venue"] and "," in t and i >= 3 and any(
-            x in t.lower() for x in ("field", "stadium", "park", "center", "arena")
-        ):
-            data["venue"] = t
+            break
 
     # Transcript lives in the same <td> as the main content (h1). Nav/sidebar are elsewhere.
     main_td = soup.find("h1") and soup.find("h1").find_parent("td")
@@ -246,26 +223,29 @@ def append_row(csv_path: Path, row: dict) -> None:
 
 
 def run(
-    csv_path: Path = CSV_PATH,
+    csv_dir: Path = CSV_DIR,
     rate_limit_sec: float = RATE_LIMIT_SEC,
     resume: bool = True,
-    max_letters: int | None = None,
+    start_letter: str | None = "m",
 ) -> None:
-    """Full scrape: letters → players → interviews → transcripts, write to CSV.
-    Set max_letters (e.g. 1) to limit scope for testing; None = all A–Z.
+    """Full scrape: letters → players → interviews → transcripts. One CSV per letter in csv_dir.
+    start_letter: only letters >= this (e.g. "m" → m–z). None = from "a".
     """
     global RATE_LIMIT_SEC
     RATE_LIMIT_SEC = rate_limit_sec
-    scraped_ids = load_scraped_ids(csv_path) if resume else set()
-    ensure_csv_header(csv_path)
     session = requests.Session()
     session.headers.update({"User-Agent": "Mozilla/5.0 (compatible; ASAP transcript scraper)"})
 
     letter_urls = get_letter_urls()
-    if max_letters is not None:
-        letter_urls = letter_urls[:max_letters]
+    if start_letter is not None:
+        letter_urls = [u for u in letter_urls if parse_qs(urlparse(u).query).get("letter", [""])[0] >= start_letter]
     total_new = 0
     for letter_url in letter_urls:
+        letter = parse_qs(urlparse(letter_url).query).get("letter", [""])[0]
+        csv_path = csv_dir / f"{CSV_NAME_PREFIX}_{letter}.csv"
+        scraped_ids = load_scraped_ids(csv_path) if resume else set()
+        ensure_csv_header(csv_path)
+
         soup = get_soup(session, letter_url)
         time.sleep(RATE_LIMIT_SEC)
         players = get_player_links(soup)
@@ -287,7 +267,7 @@ def run(
                     append_row(csv_path, row)
                     scraped_ids.add(iid)
                     total_new += 1
-    print(f"Done. New transcripts written: {total_new}. CSV: {csv_path}")
+    print(f"Done. New transcripts written: {total_new}. CSVs: {csv_dir}")
 
 
 if __name__ == "__main__":
