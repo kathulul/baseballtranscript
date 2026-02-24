@@ -14,7 +14,6 @@ import requests
 from bs4 import BeautifulSoup
 
 
-# Master link: baseball category (id=2). Base URL and category derived from it.
 LANDING_URL = "https://www.asapsports.com/showcat.php?id=2"
 _landing = urlparse(LANDING_URL)
 BASE_URL = f"{_landing.scheme}://{_landing.netloc}"
@@ -228,7 +227,7 @@ def run(
     resume: bool = True,
     start_letter: str | None = "m",
 ) -> None:
-    """Full scrape: letters → players → interviews → transcripts. One CSV per letter in csv_dir.
+    """Full scrape: letters → players → interviews → transcripts. One CSV per letter.
     start_letter: only letters >= this (e.g. "m" → m–z). None = from "a".
     """
     global RATE_LIMIT_SEC
